@@ -61,15 +61,18 @@ First QA check that we're going to add is PHP syntax check. PHP has a built-in l
 ```sh
 #!/bin/sh
 
+files=`sh ci/get-changed-php-files.sh | xargs`
+
 last_status=0
 status=0
 
-# Loop through arguments and run php -l on each
-for f in $@ ; do
-    php -l $f > /dev/null
+# Loop through changed PHP files and run php -l on each
+for f in "$files" ; do
+    message=`php -l $f`
     last_status="$?"
     if [ "$last_status" -ne "0" ]; then
         # Anything fails -> the whole thing fails
+        echo "PHP Linter is not happy about $f: $message"
         status="$last_status"
     fi
 done
@@ -177,6 +180,87 @@ code-style:
 
 Again, we check only those PHP files that differ from master branch, and pass their names to `phpcs` utility. That's it, [Step 3](https://gitlab.com/crocodile2u/ci-showcase/tree/step-3) is finished! If you go to see the pipeline now, you will notice that `linter` and `code-style` jobs run in parallel.
 
-# Adding PHPUnit
+## Adding PHPUnit
 
-Unit and integration tests are essential for a successful and maintaiable modern software project. In PHP world, [PHPUnit](https://phpunit.de/) is de facto standard for these purposes. The PHPQA docker image already has PHPUnit, but that's not enough. Our project is based on [Laravel](https://laravel.com/), which means it depends on a bunch of third-party libraries, Laravel itself being one of them. Those are installed into `vendor` folder with [composer](https://getcomposer.org/). You might have noticed that our `.gitignore` file has `vendor` folder as one of it entries, which means that it is not managed by the Version Control System. Some prefer their dependencies to be part of their Git repository, I prefer to have only the `composer.json` declarations in Git. Makes the repo much much smaller than the other way round, also makes it easy to avoid bloating your production builds with liraries only needed for development.
+Unit and integration tests are essential for a successful and maintaiable modern software project. In PHP world, [PHPUnit](https://phpunit.de/) is de facto standard for these purposes. The PHPQA docker image already has PHPUnit, but that's not enough. Our project is based on [Laravel](https://laravel.com/), which means it depends on a bunch of third-party libraries, Laravel itself being one of them. Those are installed into `vendor` folder with [composer](https://getcomposer.org/). You might have noticed that our `.gitignore` file has `vendor` folder as one of it entries, which means that it is not managed by the Version Control System. Some prefer their dependencies to be part of their Git repository, I prefer to have only the `composer.json` declarations in Git. Makes the repo much much smaller than the other way round, also makes it easy to avoid bloating your production builds with libraries only needed for development.
+
+Composer is also included into PHPQA docker image, and we can enrich our `.gitlab-ci.yml`:
+
+```yml
+test:
+  stage: QA
+  cache:
+    key: dependencies-including-dev
+    paths:
+      - vendor/
+  script:
+    - composer install
+    - ./vendor/bin/phpunit
+```
+
+PHPUnit requires some configuration, but in the very beginning we used `composer create-project` to create our project boilerplate. **laravel/laravel** package has a lot of things included in it, and `phpunit.xml` is also one of them. All I had to do was to add another line to it:
+
+```xml
+<server name="APP_KEY" value="base64:OhIeoYku8XvA0adkQ7ilIFvXBDFtnJH1xrvzFhtGiyA="/>
+```
+APP_KEY enironment variable is essential for Laravel to run, so I generated a key with `php artisan key:generate`.
+
+`git commit` & `git push`, and we have all three jobs on the **QA** stage!
+
+## Checking that our checks work
+
+In [this branch](https://gitlab.com/crocodile2u/ci-showcase/tree/failing-checks) I intentionally added changes that should fail all three job in our pipeline, take a look at [git diff](https://gitlab.com/crocodile2u/ci-showcase/compare/step-4...failing-checks). And we have this out from the pipeline stages:
+
+**Linter**:
+```
+$ ci/linter.sh
+PHP Linter is not happy about app/User.php: 
+Parse error: syntax error, unexpected 'syntax' (T_STRING), expecting function (T_FUNCTION) or const (T_CONST) in app/User.php on line 11
+Errors parsing app/User.php
+PHP syntax validation failed!
+ERROR: Job failed: exit code 255
+```
+
+**Code-style**:
+```
+$ if [ ! -z "$files" ]; then echo $files | xargs phpcs; fi
+
+FILE: ...ilds/crocodile2u/ci-showcase/app/Http/Controllers/Controller.php
+----------------------------------------------------------------------
+FOUND 0 ERRORS AND 1 WARNING AFFECTING 1 LINE
+----------------------------------------------------------------------
+ 13 | WARNING | Line exceeds 120 characters; contains 129 characters
+----------------------------------------------------------------------
+
+Time: 39ms; Memory: 6MB
+
+ERROR: Job failed: exit code 123
+```
+
+**test**:
+```
+$ ./vendor/bin/phpunit
+PHPUnit 7.5.6 by Sebastian Bergmann and contributors.
+
+F.                                                                  2 / 2 (100%)
+
+Time: 102 ms, Memory: 14.00 MB
+
+There was 1 failure:
+
+1) Tests\Unit\ExampleTest::testBasicTest
+This test is now failing
+Failed asserting that false is true.
+
+/builds/crocodile2u/ci-showcase/tests/Unit/ExampleTest.php:17
+
+FAILURES!
+Tests: 2, Assertions: 2, Failures: 1.
+ERROR: Job failed: exit code 1
+```
+
+Congratulations, our pipeline is running, and we now have much less chance of messing up the result of our work.
+
+## Conclusion
+
+Now you know how to set up a basic QA pipeline for your PHP project. There's still a lot to learn. Pipeline is a powerful tool. For instance, it can make deployments to different environments for you. Or it can build docker images, store artifacts and more! Sounds cool? Then spend 5 minutes of your time and leave a comment, you can also tell me if there is a pipeline topic you would like to be covered in next posts.
